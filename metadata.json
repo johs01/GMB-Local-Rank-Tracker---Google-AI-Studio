@@ -1,0 +1,7 @@
+{
+  "name": "GMB Local Rank Tracker",
+  "description": "An AI-powered tool to analyze and track your Google My Business local search rankings against competitors on a grid-based map, providing actionable insights to improve your local SEO.",
+  "requestFramePermissions": [
+    "geolocation"
+  ]
+}
