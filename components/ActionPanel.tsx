@@ -1,16 +1,17 @@
-
 import React from 'react';
 import { ClipboardIcon } from './icons/ClipboardIcon';
 import { DownloadIcon } from './icons/DownloadIcon';
-import { EyeIcon } from './icons/EyeIcon';
+import { FireIcon } from './icons/FireIcon';
 import { ScanResult, ScanSettings } from '../types';
 
 interface ActionPanelProps {
     scanResult: ScanResult;
     scanSettings: ScanSettings;
+    isHeatmapVisible: boolean;
+    onToggleHeatmap: (visible: boolean) => void;
 }
 
-const ActionPanel: React.FC<ActionPanelProps> = ({ scanResult, scanSettings }) => {
+const ActionPanel: React.FC<ActionPanelProps> = ({ scanResult, scanSettings, isHeatmapVisible, onToggleHeatmap }) => {
     
     const handleExport = () => {
         const { rankings } = scanResult;
@@ -52,14 +53,19 @@ const ActionPanel: React.FC<ActionPanelProps> = ({ scanResult, scanSettings }) =
             </button>
             <div className="border-t border-gray-200 my-1"></div>
             <div className="flex items-center justify-between p-2">
-                 <div className="flex items-center gap-3 text-sm font-medium text-gray-400">
-                    <EyeIcon />
-                    <span>Show Competitors</span>
-                 </div>
-                 <label htmlFor="competitors-toggle" className="inline-flex relative items-center cursor-not-allowed">
-                    <input type="checkbox" value="" id="competitors-toggle" className="sr-only peer" disabled />
-                    <div className="w-11 h-6 bg-gray-200 rounded-full peer peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
-                </label>
+                 <span id="heatmap-label" className={`flex items-center gap-3 text-sm font-medium transition-colors ${isHeatmapVisible ? 'text-orange-600' : 'text-gray-500'}`}>
+                    <FireIcon />
+                    Show Heatmap
+                 </span>
+                 <button
+                    role="switch"
+                    aria-checked={isHeatmapVisible}
+                    aria-labelledby="heatmap-label"
+                    onClick={() => onToggleHeatmap(!isHeatmapVisible)}
+                    className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 ${isHeatmapVisible ? 'bg-orange-500' : 'bg-gray-200'}`}
+                >
+                    <span className={`inline-block h-5 w-5 transform rounded-full bg-white transition ease-in-out duration-200 ${isHeatmapVisible ? 'translate-x-5' : 'translate-x-0.5'}`}></span>
+                </button>
             </div>
         </div>
     );

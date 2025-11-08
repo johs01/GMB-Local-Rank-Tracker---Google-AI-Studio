@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { LogoIcon } from './icons/LogoIcon';
 import { ChevronDownIcon } from './icons/ChevronDownIcon';
@@ -21,7 +20,12 @@ const Header: React.FC = () => {
           <BoltIcon />
           <span>Quick Scan</span>
         </button>
-        <div className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center text-white font-bold text-sm cursor-pointer">
+        <div 
+          role="button" 
+          tabIndex={0}
+          aria-label="User Profile"
+          className="w-8 h-8 bg-green-500 rounded-full flex items-center justify-center text-white font-bold text-sm cursor-pointer focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+        >
           S
         </div>
       </div>

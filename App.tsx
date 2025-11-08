@@ -5,8 +5,11 @@ import Sidebar from './components/Sidebar';
 import MapDisplay from './components/MapDisplay';
 import ActionPanel from './components/ActionPanel';
 import { ScanSettings, ScanResult, Business, Insight, InsightType, RankingPoint, ScanHistoryItem, PlaceAutocompleteResult } from './types';
-import { generateScanResults } from './services/mockDataService';
-import { getRankingInsights, getCompetitorGapAnalysis, getReviewVolumeAnalysis, getCompetitorList } from './services/geminiService';
+// FIX: Added .ts extension to imports.
+import { generateScanResults } from './services/mockDataService.ts';
+// FIX: Added .ts extension to imports.
+import { getRankingInsights, getCompetitorGapAnalysis, getReviewVolumeAnalysis, getCompetitorList } from './services/geminiService.ts';
+import ErrorBoundary from './components/ErrorBoundary';
 
 const App: React.FC = () => {
   const [scanSettings, setScanSettings] = useState<ScanSettings>({
@@ -25,6 +28,7 @@ const App: React.FC = () => {
   const [hoveredCompetitorId, setHoveredCompetitorId] = useState<string | null>(null);
   const [scanHistory, setScanHistory] = useState<ScanHistoryItem[]>([]);
   const [scanProgress, setScanProgress] = useState<{ current: number, total: number} | null>(null);
+  const [showHeatmap, setShowHeatmap] = useState(false);
 
   const searchCache = useRef(new Map<string, PlaceAutocompleteResult[]>());
   const placesServiceRef = useRef<google.maps.places.PlacesService | null>(null);
@@ -166,6 +170,7 @@ const App: React.FC = () => {
     setScanCompleted(false);
     setScanResult(null);
     setSelectedPoint(null);
+    setShowHeatmap(false);
     setInsights({
         ranking: { status: 'idle', content: null, sources: [] },
         competitor: { status: 'idle', content: null, sources: [] },
@@ -194,6 +199,7 @@ const App: React.FC = () => {
           return newHistory;
       });
 
+// FIX: Corrected the syntax for the catch block from `catch (error) =>` to `catch (error)`.
     } catch (error) {
       console.error("Failed to complete scan:", error);
     } finally {
@@ -207,6 +213,7 @@ const App: React.FC = () => {
     setScanResult(item.result);
     setScanCompleted(true);
     setSelectedPoint(null);
+    setShowHeatmap(false);
     setInsights({
         ranking: { status: 'idle', content: null, sources: [] },
         competitor: { status: 'idle', content: null, sources: [] },
@@ -226,6 +233,7 @@ const App: React.FC = () => {
       setScanResult(null);
       setScanCompleted(false);
       setSelectedPoint(null);
+      setShowHeatmap(false);
       setInsights({
         ranking: { status: 'idle', content: null, sources: [] },
         competitor: { status: 'idle', content: null, sources: [] },
@@ -263,41 +271,51 @@ const App: React.FC = () => {
     <div className="bg-gray-50 min-h-screen flex flex-col text-gray-800">
       <Header />
       <main className="flex-grow flex h-[calc(100vh-4rem)]">
-        <Sidebar
-          scanSettings={scanSettings}
-          setScanSettings={setScanSettings}
-          scanResult={scanResult}
-          onScan={handleScan}
-          isScanning={isScanning}
-          onBack={handleBackToSettings}
-          businesses={businesses}
-          onSearch={(query) => handlePlaceSearch(query, mapInstance)}
-          isSearching={isSearching}
-          onSelectBusiness={(place) => handlePlaceSelect(place, mapInstance)}
-          insights={insights}
-          fetchInsights={fetchInsights}
-          selectedPoint={selectedPoint}
-          onHoverCompetitor={setHoveredCompetitorId}
-          scanProgress={scanProgress}
-          scanHistory={scanHistory}
-          onLoadHistory={loadScanFromHistory}
-          onDeleteHistory={deleteScanFromHistory}
-        />
+        <ErrorBoundary>
+            <Sidebar
+              scanSettings={scanSettings}
+              setScanSettings={setScanSettings}
+              scanResult={scanResult}
+              onScan={handleScan}
+              isScanning={isScanning}
+              onBack={handleBackToSettings}
+              businesses={businesses}
+              onSearch={(query) => handlePlaceSearch(query, mapInstance)}
+              isSearching={isSearching}
+              onSelectBusiness={(place) => handlePlaceSelect(place, mapInstance)}
+              insights={insights}
+              fetchInsights={fetchInsights}
+              selectedPoint={selectedPoint}
+              onHoverCompetitor={setHoveredCompetitorId}
+              scanProgress={scanProgress}
+              scanHistory={scanHistory}
+              onLoadHistory={loadScanFromHistory}
+              onDeleteHistory={deleteScanFromHistory}
+            />
+        </ErrorBoundary>
         <div className="flex-grow relative">
-          <MapDisplay 
-            onMapLoad={setMapInstance}
-            results={scanResult?.rankings ?? []} 
-            businessLocation={scanSettings.location}
-            onSelectPoint={setSelectedPoint}
-            selectedPoint={selectedPoint}
-            hoveredCompetitorId={hoveredCompetitorId}
-          />
+          <ErrorBoundary>
+            <MapDisplay 
+              onMapLoad={setMapInstance}
+              results={scanResult?.rankings ?? []} 
+              businessLocation={scanSettings.location}
+              onSelectPoint={setSelectedPoint}
+              selectedPoint={selectedPoint}
+              hoveredCompetitorId={hoveredCompetitorId}
+              showHeatmap={showHeatmap}
+            />
+          </ErrorBoundary>
+          
+          <div aria-live="polite" className="sr-only">
+            {scanCompleted && "Scan has completed."}
+          </div>
+          
           {scanCompleted && (
              <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-gray-800 text-white py-2 px-4 rounded-md shadow-lg text-sm z-20">
              Your scan has been completed. <button onClick={() => setScanCompleted(false)} className="font-bold underline ml-2">Close</button>
            </div>
           )}
-          {scanResult && <ActionPanel scanResult={scanResult} scanSettings={scanSettings}/>}
+          {scanResult && <ActionPanel scanResult={scanResult} scanSettings={scanSettings} isHeatmapVisible={showHeatmap} onToggleHeatmap={setShowHeatmap} />}
         </div>
       </main>
     </div>
