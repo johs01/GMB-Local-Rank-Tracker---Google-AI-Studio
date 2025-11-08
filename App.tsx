@@ -1,12 +1,12 @@
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import Header from './components/Header';
 import Sidebar from './components/Sidebar';
 import MapDisplay from './components/MapDisplay';
 import ActionPanel from './components/ActionPanel';
-import { ScanSettings, ScanResult, Business, Insight, InsightType, RankingPoint, ScanHistoryItem } from './types';
+import { ScanSettings, ScanResult, Business, Insight, InsightType, RankingPoint, ScanHistoryItem, PlaceAutocompleteResult } from './types';
 import { generateScanResults } from './services/mockDataService';
-import { getRankingInsights, getCompetitorGapAnalysis, searchLocalBusinesses, getReviewVolumeAnalysis, getCompetitorList } from './services/geminiService';
+import { getRankingInsights, getCompetitorGapAnalysis, getReviewVolumeAnalysis, getCompetitorList } from './services/geminiService';
 
 const App: React.FC = () => {
   const [scanSettings, setScanSettings] = useState<ScanSettings>({
@@ -17,19 +17,45 @@ const App: React.FC = () => {
   const [scanResult, setScanResult] = useState<ScanResult | null>(null);
   const [isScanning, setIsScanning] = useState(false);
   const [scanCompleted, setScanCompleted] = useState(false);
-  const [businesses, setBusinesses] = useState<Business[]>([]);
+  const [businesses, setBusinesses] = useState<PlaceAutocompleteResult[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [userLocation, setUserLocation] = useState<{ latitude: number, longitude: number } | null>(null);
   
-  // "10/10" Feature States
   const [selectedPoint, setSelectedPoint] = useState<RankingPoint | null>(null);
   const [hoveredCompetitorId, setHoveredCompetitorId] = useState<string | null>(null);
   const [scanHistory, setScanHistory] = useState<ScanHistoryItem[]>([]);
   const [scanProgress, setScanProgress] = useState<{ current: number, total: number} | null>(null);
 
+  const searchCache = useRef(new Map<string, PlaceAutocompleteResult[]>());
+  const placesServiceRef = useRef<google.maps.places.PlacesService | null>(null);
+  const autocompleteServiceRef = useRef<google.maps.places.AutocompleteService | null>(null);
+
+
+  const getLocation = useCallback((): Promise<{ latitude: number, longitude: number }> => {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error("Geolocation is not supported by this browser."));
+        return;
+      }
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const location = {
+            latitude: position.coords.latitude,
+            longitude: position.coords.longitude,
+          };
+          setUserLocation(location);
+          resolve(location);
+        },
+        (error) => {
+          console.error("Error getting user location:", error);
+          reject(error);
+        }
+      );
+    });
+  }, []);
+
 
   useEffect(() => {
-    // Load scan history from local storage on initial render
     try {
       const savedHistory = localStorage.getItem('gmbScanHistory');
       if (savedHistory) {
@@ -40,20 +66,10 @@ const App: React.FC = () => {
       setScanHistory([]);
     }
     
-    if (navigator.geolocation) {
-        navigator.geolocation.getCurrentPosition(
-            (position) => {
-                setUserLocation({
-                    latitude: position.coords.latitude,
-                    longitude: position.coords.longitude,
-                });
-            },
-            (error) => {
-                console.error("Error getting user location:", error);
-            }
-        );
-    }
-  }, []);
+    getLocation().catch(() => {
+      console.log("User location not available on initial load.");
+    });
+  }, [getLocation]);
 
   const [insights, setInsights] = useState<Record<InsightType, Insight>>({
     ranking: { status: 'idle', content: null, sources: [] },
@@ -61,22 +77,83 @@ const App: React.FC = () => {
     review: { status: 'idle', content: null, sources: [] },
   });
 
-  const handleSearch = useCallback(async (query: string) => {
-    if (query.length < 3) {
-      setBusinesses([]);
-      return;
+  const handlePlaceSearch = useCallback(async (query: string, map: google.maps.Map | null) => {
+      if (query.length < 3) {
+          setBusinesses([]);
+          return;
+      }
+      if (searchCache.current.has(query)) {
+          setBusinesses(searchCache.current.get(query)!);
+          return;
+      }
+      if (!window.google?.maps?.places) {
+          console.error("Places API not loaded");
+          return;
+      }
+      if (!autocompleteServiceRef.current) {
+          autocompleteServiceRef.current = new window.google.maps.places.AutocompleteService();
+      }
+
+      setIsSearching(true);
+      
+      let locationToUse = userLocation;
+      if (!locationToUse) {
+          try {
+              locationToUse = await getLocation();
+          } catch (error) {
+              console.warn("Could not get user location for search, proceeding without it.");
+          }
+      }
+
+      const request: google.maps.places.AutocompletionRequest = {
+        input: query,
+        types: ['establishment'],
+      };
+      if (locationToUse) {
+        request.location = new google.maps.LatLng(locationToUse.latitude, locationToUse.longitude);
+        request.radius = 50000; // 50km radius bias
+      }
+
+      autocompleteServiceRef.current.getPlacePredictions(request, (results, status) => {
+          if (status === window.google.maps.places.PlacesServiceStatus.OK && results) {
+              const formattedResults = results.map(r => ({
+                  id: r.place_id,
+                  name: r.structured_formatting.main_text,
+                  address: r.structured_formatting.secondary_text,
+              }));
+              searchCache.current.set(query, formattedResults);
+              setBusinesses(formattedResults);
+          } else {
+              setBusinesses([]);
+          }
+          setIsSearching(false);
+      });
+  }, [userLocation, getLocation]);
+
+  const handlePlaceSelect = useCallback((place: PlaceAutocompleteResult, map: google.maps.Map | null) => {
+    if (!map) return;
+    if (!placesServiceRef.current) {
+        placesServiceRef.current = new window.google.maps.places.PlacesService(map);
     }
+    
     setIsSearching(true);
-    try {
-      const results = await searchLocalBusinesses(query, userLocation ?? undefined);
-      setBusinesses(results);
-    } catch (error) {
-      console.error("Error searching businesses:", error);
-      setBusinesses([]);
-    } finally {
-      setIsSearching(false);
-    }
-  }, [userLocation]);
+    placesServiceRef.current.getDetails({ placeId: place.id, fields: ['name', 'formatted_address', 'geometry', 'place_id'] }, (result, status) => {
+        if (status === window.google.maps.places.PlacesServiceStatus.OK && result?.geometry?.location) {
+            const business: Business = {
+                id: result.place_id!,
+                name: result.name!,
+                address: result.formatted_address!,
+                latitude: result.geometry.location.lat(),
+                longitude: result.geometry.location.lng(),
+            };
+            setScanSettings(prev => ({ ...prev, location: business }));
+            setBusinesses([]);
+        } else {
+            console.error('Failed to get place details:', status);
+        }
+        setIsSearching(false);
+    });
+  }, []);
 
   const handleSelectBusiness = useCallback((business: Business) => {
     setScanSettings(prev => ({ ...prev, location: business }));
@@ -96,17 +173,15 @@ const App: React.FC = () => {
     });
 
     try {
-      // Step 1: Fetch real competitors
-      const competitors = await getCompetitorList(scanSettings.location, scanSettings.searchQuery);
+      const { businesses: competitors, sources: competitorSources } = await getCompetitorList(scanSettings.location, scanSettings.searchQuery);
       
-      // Step 2: Generate scan results with real-time progress
       const onProgress = (progress: { current: number, total: number }) => setScanProgress(progress);
-      const results = await generateScanResults(scanSettings, competitors, onProgress);
+      
+      const results = await generateScanResults(scanSettings, competitors, onProgress, competitorSources);
       
       setScanResult(results);
       setScanCompleted(true);
 
-      // Step 3: Save to history
       const newHistoryItem: ScanHistoryItem = {
         id: new Date().toISOString(),
         timestamp: new Date().toLocaleString(),
@@ -114,7 +189,7 @@ const App: React.FC = () => {
         result: results,
       };
       setScanHistory(prev => {
-          const newHistory = [newHistoryItem, ...prev.slice(0, 9)]; // Keep latest 10
+          const newHistory = [newHistoryItem, ...prev.slice(0, 9)];
           localStorage.setItem('gmbScanHistory', JSON.stringify(newHistory));
           return newHistory;
       });
@@ -182,6 +257,8 @@ const App: React.FC = () => {
   }, [scanSettings, scanResult]);
 
 
+  const [mapInstance, setMapInstance] = useState<google.maps.Map | null>(null);
+
   return (
     <div className="bg-gray-50 min-h-screen flex flex-col text-gray-800">
       <Header />
@@ -194,9 +271,9 @@ const App: React.FC = () => {
           isScanning={isScanning}
           onBack={handleBackToSettings}
           businesses={businesses}
-          onSearch={handleSearch}
+          onSearch={(query) => handlePlaceSearch(query, mapInstance)}
           isSearching={isSearching}
-          onSelectBusiness={handleSelectBusiness}
+          onSelectBusiness={(place) => handlePlaceSelect(place, mapInstance)}
           insights={insights}
           fetchInsights={fetchInsights}
           selectedPoint={selectedPoint}
@@ -208,6 +285,7 @@ const App: React.FC = () => {
         />
         <div className="flex-grow relative">
           <MapDisplay 
+            onMapLoad={setMapInstance}
             results={scanResult?.rankings ?? []} 
             businessLocation={scanSettings.location}
             onSelectPoint={setSelectedPoint}

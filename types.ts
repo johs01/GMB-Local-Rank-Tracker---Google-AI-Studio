@@ -7,6 +7,12 @@ export interface Business {
   longitude: number;
 }
 
+export interface PlaceAutocompleteResult {
+    id: string;
+    name: string;
+    address: string;
+}
+
 export interface ScanSettings {
   location: Business | null;
   searchQuery: string;
@@ -26,6 +32,11 @@ export interface RankingPoint {
   competitorRanks: CompetitorRank[]; // Full ranking list for this point
 }
 
+export interface GroundingSource {
+    uri: string;
+    title: string;
+}
+
 export interface ScanResult {
   summary: {
     averageRank: number;
@@ -35,14 +46,10 @@ export interface ScanResult {
   rankings: RankingPoint[];
   gridSize: string;
   competitors: Business[];
+  sources: GroundingSource[]; // API COMPLIANCE FIX
 }
 
 export type InsightType = 'ranking' | 'competitor' | 'review';
-
-export interface GroundingSource {
-    uri: string;
-    title: string;
-}
 
 export interface Insight {
     status: 'idle' | 'loading' | 'success' | 'error';

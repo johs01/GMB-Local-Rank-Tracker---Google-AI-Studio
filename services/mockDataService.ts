@@ -1,5 +1,5 @@
 
-import { ScanResult, RankingPoint, ScanSettings, Business, CompetitorRank } from '../types';
+import { ScanResult, RankingPoint, ScanSettings, Business, CompetitorRank, GroundingSource } from '../types';
 
 const parseGridSize = (gridSize: string): { width: number; height: number; spanKm: number } => {
     const sizeMatch = gridSize.match(/(\d+)\s*x\s*(\d+)/);
@@ -21,13 +21,13 @@ const getDistanceKm = (lat1: number, lon1: number, lat2: number, lon2: number) =
     return R * c;
 }
 
-// A simple delay utility to simulate network latency
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
 export const generateScanResults = async (
     settings: ScanSettings, 
     competitors: Business[],
-    onProgress: (progress: { current: number, total: number }) => void
+    onProgress: (progress: { current: number, total: number }) => void,
+    sources: GroundingSource[] // API COMPLIANCE FIX: Accept sources
 ): Promise<ScanResult> => {
   if (!settings.location) {
       throw new Error("Location must be provided for a scan.");
@@ -56,19 +56,15 @@ export const generateScanResults = async (
       const lat = startLat - r * stepLat;
       const lng = startLng + c * stepLng;
 
-      // Simulate a network delay for each point to make the progress bar visible
       await sleep(10); 
       onProgress({ current: pointId + 1, total: totalPoints });
 
-      // Calculate a "score" for each business based on distance to this point
       const businessScores = allBusinesses.map(business => {
           const distance = getDistanceKm(lat, lng, business.latitude, business.longitude);
-          // Score is higher for closer businesses, with some randomness
           const score = (1 / (distance + 0.1)) * (0.8 + Math.random() * 0.4);
           return { business, score };
       });
       
-      // Sort businesses by score to get their ranks
       businessScores.sort((a, b) => b.score - a.score);
 
       const competitorRanks: CompetitorRank[] = businessScores.map((item, index) => ({
@@ -93,6 +89,29 @@ export const generateScanResults = async (
   const top3 = rankings.filter(r => r.rank <= 3).length;
   const top10 = rankings.filter(r => r.rank <= 10).length;
 
+  // DATA CONSISTENCY FIX: Create the authoritative, sorted competitor list
+  const businessRankSums: Record<string, { total: number, count: number, business: Business }> = {};
+  allBusinesses.forEach(b => {
+      businessRankSums[b.id] = { total: 0, count: 0, business: b };
+  });
+
+  rankings.forEach(point => {
+      point.competitorRanks.forEach(cr => {
+          if (businessRankSums[cr.business.id]) {
+              businessRankSums[cr.business.id].total += cr.rank;
+              businessRankSums[cr.business.id].count++;
+          }
+      });
+  });
+
+  const sortedCompetitorList = Object.values(businessRankSums)
+    .map(data => ({
+        ...data.business,
+        averageRank: data.count > 0 ? data.total / data.count : 99,
+    }))
+    .sort((a, b) => a.averageRank - b.averageRank);
+
+
   return {
     summary: {
       averageRank: parseFloat(averageRank.toFixed(1)),
@@ -101,6 +120,7 @@ export const generateScanResults = async (
     },
     rankings,
     gridSize: settings.gridSize,
-    competitors,
+    competitors: sortedCompetitorList, // Use the consistent, sorted list
+    sources, // API COMPLIANCE FIX: Include sources in the final result
   };
 };

@@ -1,4 +1,3 @@
-
 import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { RankingPoint, Business } from '../types';
 
@@ -14,14 +13,25 @@ declare global {
       class Point { constructor(x: number, y: number); }
       class Size { constructor(width: number, height: number, widthUnit?: string, heightUnit?: string); }
       class LatLng { constructor(lat: number, lng: number); }
-      // FIX: Added getCenter() to the LatLngBounds definition to match the Google Maps API and resolve a TypeScript error.
       class LatLngBounds { constructor(sw?: LatLng, ne?: LatLng); extend(point: LatLng | { lat: number; lng: number }): void; getCenter(): LatLng; }
       interface MapsEventListener { remove(): void; }
+      namespace places {
+        // FIX: Change 'PlacesServiceStatus' type to 'string' for callback status parameter.
+        class AutocompleteService { getPlacePredictions(request: AutocompletionRequest, callback: (results: AutocompletePrediction[] | null, status: string) => void): void; }
+        // FIX: Change 'PlacesServiceStatus' type to 'string' for callback status parameter.
+        class PlacesService { constructor(map: Map); getDetails(request: PlaceDetailsRequest, callback: (result: PlaceResult | null, status: string) => void): void; }
+        interface AutocompletionRequest { input: string; types?: string[]; location?: LatLng; radius?: number; }
+        interface AutocompletePrediction { place_id: string; structured_formatting: { main_text: string; secondary_text: string }; }
+        interface PlaceDetailsRequest { placeId: string; fields: string[]; }
+        interface PlaceResult { name?: string; formatted_address?: string; geometry?: { location?: LatLng }; place_id?: string; }
+        const PlacesServiceStatus: { OK: string };
+      }
   }
   interface Window { google: typeof google; gm_authFailure: () => void; }
 }
 
 interface MapDisplayProps {
+  onMapLoad: (map: google.maps.Map) => void;
   results: RankingPoint[];
   businessLocation: Business | null;
   onSelectPoint: (point: RankingPoint | null) => void;
@@ -32,20 +42,35 @@ interface MapDisplayProps {
 const scriptId = 'google-maps-script';
 let mapsApiPromise: Promise<void> | null = null;
 
-const loadGoogleMapsScriptOnce = (apiKey: string): Promise<void> => {
+// ENTERPRISE FIX: Create a resilient loader that can be reset on auth failure.
+const resetMapsApi = () => {
+    mapsApiPromise = null;
+    const existingScript = document.getElementById(scriptId);
+    if (existingScript) {
+        existingScript.remove();
+    }
+    // Nullify the google object to ensure a completely clean reload.
+    if ((window as any).google) {
+       (window as any).google = undefined;
+    }
+};
+
+const loadGoogleMapsScript = (apiKey: string): Promise<void> => {
     if (mapsApiPromise) return mapsApiPromise;
     mapsApiPromise = new Promise((resolve, reject) => {
-        if (window.google?.maps) return resolve();
-        const existingScript = document.getElementById(scriptId);
-        if (existingScript) existingScript.remove();
-
+        // Check for google object existence, but proceed with script load if it's missing.
+        if (window.google?.maps?.places) return resolve();
+        
         const script = document.createElement('script');
         script.id = scriptId;
-        script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}`;
+        script.src = `https://maps.googleapis.com/maps/api/js?key=${apiKey}&libraries=places`;
         script.async = true;
         script.defer = true;
         script.onload = () => resolve();
-        script.onerror = (error) => { mapsApiPromise = null; reject(error); };
+        script.onerror = (error) => {
+            resetMapsApi(); // Reset on script load errors too.
+            reject(error);
+        };
         document.head.appendChild(script);
     });
     return mapsApiPromise;
@@ -68,6 +93,7 @@ const mapStyles: google.maps.MapTypeStyle[] = [
 ];
 
 const createMarkerIcon = (rank: number, isSelected: boolean, isDimmed: boolean): google.maps.MarkerOptions['icon'] => {
+  const rankText = rank > 20 ? '20+' : rank.toString();
   const getColor = () => {
     if (rank <= 3) return '#22c55e'; // green-500
     if (rank <= 6) return '#facc15'; // yellow-400
@@ -75,13 +101,13 @@ const createMarkerIcon = (rank: number, isSelected: boolean, isDimmed: boolean):
     return '#ef4444'; // red-500
   };
   const size = isSelected ? 44 : 36;
-  const fontSize = isSelected ? 18 : 16;
+  const fontSize = rank > 20 ? 14 : (isSelected ? 18 : 16);
   const strokeWidth = isSelected ? 3 : 2;
 
   const svg = `
     <svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" fill="none" xmlns="http://www.w3.org/2000/svg">
       <circle cx="${size/2}" cy="${size/2}" r="${size/2 - strokeWidth/2}" fill="${getColor()}" stroke="${isSelected ? '#4F46E5' : 'rgba(0,0,0,0.1)'}" stroke-width="${strokeWidth}"/>
-      <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Inter, sans-serif" font-size="${fontSize}" font-weight="bold" fill="white">${rank}</text>
+      <text x="50%" y="50%" dominant-baseline="middle" text-anchor="middle" font-family="Inter, sans-serif" font-size="${fontSize}" font-weight="bold" fill="white">${rankText}</text>
     </svg>
   `;
 
@@ -92,7 +118,7 @@ const createMarkerIcon = (rank: number, isSelected: boolean, isDimmed: boolean):
   };
 };
 
-const MapDisplay: React.FC<MapDisplayProps> = ({ results, businessLocation, onSelectPoint, selectedPoint, hoveredCompetitorId }) => {
+const MapDisplay: React.FC<MapDisplayProps> = ({ onMapLoad, results, businessLocation, onSelectPoint, selectedPoint, hoveredCompetitorId }) => {
   const mapRef = useRef<HTMLDivElement>(null);
   const [map, setMap] = useState<google.maps.Map | null>(null);
   const [mapsApiKey, setMapsApiKey] = useState<string | null>(() => localStorage.getItem('googleMapsApiKey'));
@@ -106,17 +132,23 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ results, businessLocation, onSe
 
   useEffect(() => {
     const handleAuthFailure = () => {
-        setApiKeyError("Invalid Google Maps API Key.");
+        setApiKeyError("Your Google Maps API Key is invalid or has expired. Please enter a new, valid key to continue.");
         localStorage.removeItem('googleMapsApiKey');
         setMapsApiKey(null);
-        setIsApiLoaded(false); setMap(null);
+        setIsApiLoaded(false); 
+        setMap(null);
+        // ENTERPRISE FIX: Reset the API loader to allow for a clean reload with a new key.
+        resetMapsApi();
     };
     window.gm_authFailure = handleAuthFailure;
 
     if (mapsApiKey && !isApiLoaded) {
-      loadGoogleMapsScriptOnce(mapsApiKey)
+      loadGoogleMapsScript(mapsApiKey)
         .then(() => { setIsApiLoaded(true); setApiKeyError(null); })
-        .catch(error => { setApiKeyError("Failed to load Google Maps script."); });
+        .catch(error => { 
+            setApiKeyError("Failed to load Google Maps script.");
+            resetMapsApi(); // Also reset on script load error
+        });
     }
     return () => { (window as any).gm_authFailure = null; };
   }, [mapsApiKey, isApiLoaded]);
@@ -128,17 +160,29 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ results, businessLocation, onSe
         styles: mapStyles, disableDefaultUI: true, zoomControl: true,
       });
       setMap(newMap);
+      onMapLoad(newMap);
     }
-  }, [isApiLoaded, map]);
+  }, [isApiLoaded, map, onMapLoad]);
+
+  useEffect(() => {
+    if (map && businessLocation && results.length > 0) {
+        const bounds = new window.google.maps.LatLngBounds();
+        bounds.extend({ lat: businessLocation.latitude, lng: businessLocation.longitude });
+        results.forEach(point => bounds.extend({ lat: point.lat, lng: point.lng }));
+        map.fitBounds(bounds);
+    } else if (map && businessLocation) {
+        map.setCenter({ lat: businessLocation.latitude, lng: businessLocation.longitude });
+        map.setZoom(14);
+    }
+  }, [map, results, businessLocation]);
+
 
   useEffect(() => {
     if (!map) return;
   
-    // Clear previous listeners
     listenerRefs.current.forEach(listener => listener.remove());
     listenerRefs.current = [];
   
-    // Update business marker
     if (businessLocation) {
         const businessLatLng = { lat: businessLocation.latitude, lng: businessLocation.longitude };
         const isDimmed = hoveredCompetitorId !== null && hoveredCompetitorId !== businessLocation.id;
@@ -158,7 +202,6 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ results, businessLocation, onSe
         businessMarkerRef.current?.setMap(null);
     }
   
-    // Update ranking markers
     results.forEach((point, i) => {
         const isSelected = selectedPoint?.id === point.id;
         const isHoverMatch = point.competitorRanks.some(cr => cr.business.id === hoveredCompetitorId);
@@ -186,13 +229,6 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ results, businessLocation, onSe
         markersRef.current[i]?.setMap(null);
     }
   
-    if (businessLocation && !selectedPoint) {
-        const bounds = new window.google.maps.LatLngBounds();
-        bounds.extend({ lat: businessLocation.latitude, lng: businessLocation.longitude });
-        results.forEach(point => bounds.extend({ lat: point.lat, lng: point.lng }));
-        if (results.length > 0) map.fitBounds(bounds);
-        else { map.setCenter(bounds.getCenter()); map.setZoom(14); }
-    }
   }, [map, results, businessLocation, onSelectPoint, selectedPoint, hoveredCompetitorId]);
 
   const handleKeySubmit = (e: React.FormEvent) => {
@@ -200,7 +236,8 @@ const MapDisplay: React.FC<MapDisplayProps> = ({ results, businessLocation, onSe
       if (keyInput.trim()) {
           localStorage.setItem('googleMapsApiKey', keyInput.trim());
           setMapsApiKey(keyInput.trim());
-          setIsApiLoaded(false); setKeyInput('');
+          setIsApiLoaded(false); // Force re-initialization
+          setKeyInput('');
       }
   };
 

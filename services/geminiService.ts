@@ -1,3 +1,4 @@
+
 import { GoogleGenAI, Type } from "@google/genai";
 import { Business, GroundingSource, ScanResult } from '../types';
 
@@ -46,41 +47,12 @@ async function parseBusinessList(text: string): Promise<Business[]> {
     } catch (error) {
         console.error("Failed to parse JSON from Gemini response:", error);
         console.error("Original text:", text);
-        return []; // Return empty array if parsing fails
+        return [];
     }
     return [];
 }
 
-export async function searchLocalBusinesses(
-    query: string,
-    location?: { latitude: number; longitude: number }
-  ): Promise<Business[]> {
-    try {
-      const ai = getClient();
-      const prompt = `Find local businesses that match the query "${query}". If the query includes a location, use that. Otherwise, use the provided coordinates as the search center.
-      Respond with ONLY a JSON array of objects. Do not include any other text, explanations, or markdown formatting.
-      Each object in the array should represent a business and have the following properties: "id" (the unique Google Place ID), "name" (the official business name), "address" (the full street address), "latitude", and "longitude".`;
-  
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          tools: [{ googleMaps: {} }],
-          toolConfig: location ? {
-            retrievalConfig: { latLng: location }
-          } : undefined,
-        },
-      });
-  
-      return await parseBusinessList(response.text);
-  
-    } catch (error) {
-      console.error('Error searching for businesses:', error);
-      throw new Error(`Failed to call the Gemini API. ${error instanceof Error ? error.message : ''}`);
-    }
-}
-
-export async function getCompetitorList(business: Business, keyword: string): Promise<Business[]> {
+export async function getCompetitorList(business: Business, keyword: string): Promise<{ businesses: Business[]; sources: GroundingSource[] }> {
     try {
         const ai = getClient();
         const prompt = `Find the top 20 local competitors for the keyword "${keyword}" near ${business.name} at ${business.address}. Exclude "${business.name}" itself from the list.
@@ -98,7 +70,10 @@ export async function getCompetitorList(business: Business, keyword: string): Pr
             },
         });
         
-        return await parseBusinessList(response.text);
+        const businesses = await parseBusinessList(response.text);
+        const sources = parseGroundingChunks(response.candidates?.[0]?.groundingMetadata?.groundingChunks);
+        
+        return { businesses, sources };
 
     } catch (error) {
         console.error('Error getting competitor list:', error);
@@ -129,7 +104,7 @@ export async function getRankingInsights(business: Business, keyword: string, sc
   
       const content = response.text;
   
-      return { content, sources: [] }; // No grounding for this synthetic data analysis
+      return { content, sources: [] };
     } catch (error) {
       console.error("Error generating ranking insights:", error);
       throw new Error(`Failed to call the Gemini API. ${error instanceof Error ? error.message : ''}`);
